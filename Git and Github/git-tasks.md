@@ -1,18 +1,18 @@
-# Git and GitHub
+# Git & GitHub Experiments
 
-Two small experiments, run in a scratch repository, with the real output pasted in.
+Quick hands-on tests done in a scratch repo to see how Git behaves under the hood, with actual shell sessions and outputs captured along the way.
 
-## Experiment 1 - `git commit -m` versus `git commit -a -m`
+---
 
-The difference is entirely about the staging area (index).
+## Experiment 1: `git commit -m` vs `git commit -a -m`
 
-- `git commit -m "msg"` records whatever is in the index. If you edited a file but never ran
-  `git add`, the edit is not part of the commit.
-- `git commit -a -m "msg"` first stages every *tracked* file that has been modified or deleted,
-  then commits. It saves the separate `git add` step for files git already knows about.
-- Neither form touches *untracked* files. A brand-new file always needs an explicit `git add`.
+The core difference comes down to how Git handles the staging area (index).
 
-### Session
+- **`git commit -m "..."`**: Only commits changes that are currently staged in the index. If you edit a file but forget to run `git add`, Git completely ignores the edit during commit time.
+- **`git commit -a -m "..."`**: Automatically stages any modifications or deletions to files that Git is *already tracking*, and then creates the commit in one shot. It skips having to run `git add` for files Git already knows about.
+- **The catch with untracked files**: `-a` will never pick up brand-new, untracked files. New files always require an explicit `git add`.
+
+### Terminal Run
 
 ```text
 $ git init -q -b main .
@@ -55,19 +55,21 @@ $ git log --oneline
 5f6bfdb first version of todo
 ```
 
-### Takeaways
+### Quick Takeaways
 
-1. The first `git commit -m` did nothing because the modification was only in the working tree.
-2. `-a` staged and committed the same modification in one step.
-3. `-a` refused to pick up `untracked.txt`. Git tells you so in the message.
+1. Running plain `git commit -m` failed because our changes lived only in the working tree, not the staging area.
+2. Passing `-a` staged the modified file and committed it together without an extra step.
+3. `-a` outright refused to touch `untracked.txt` — Git warns you right away that new files still need an explicit `git add`.
 
-## Experiment 2 - `git cherry-pick`
+---
 
-Cherry-pick replays one commit from anywhere in the repository on top of the current branch.
-It creates a *new* commit with the same diff and message; the original stays where it was.
-Useful when a branch has one change you want now and several you do not.
+## Experiment 2: `git cherry-pick`
 
-### Setup: a `hotfix` branch with three commits
+Cherry-picking lets you pluck a specific commit from any branch and replay it directly onto your current branch. It produces a brand-new commit containing the exact same diff and commit message, while leaving the original branch untouched.
+
+Super handy when someone commits a critical bugfix onto a feature or hotfix branch, and you need just that one fix on `main` without pulling in half-baked work or debug noise.
+
+### Setup: Creating a `hotfix` branch with 3 commits
 
 ```text
 $ echo "config v1" > config.txt && git add config.txt && git commit -q -m "Add config"
@@ -87,10 +89,9 @@ e69654f hotfix: enable logging
 5f6bfdb first version of todo
 ```
 
-Only the middle commit (`6480118`, the port fix) is wanted on `main`. The logging change and
-the debug file should stay on the branch.
+We only want commit `6480118` (the port fix) back on `main`. The temporary debug file and logging setup should stay behind on `hotfix`.
 
-### Pick just that commit
+### Cherry-picking the port fix commit onto `main`
 
 ```text
 $ git switch main
@@ -116,12 +117,12 @@ $ cat config.txt
 config v1 + port fix
 ```
 
-### Takeaways
+### Key Takeaways
 
-- `main` now has the port fix, but neither `logging.txt` nor `debug.txt` exists there.
-- The picked commit got a new hash (`5dbc089` vs `6480118`) because it has a different parent,
-  even though the message and diff are identical. Git kept the original author date.
-- If the pick conflicts, git stops and you resolve the files, then `git cherry-pick --continue`
-  (or `--abort` to back out).
-- Handy variants: `git cherry-pick A..B` for a range, `-n` to apply without committing,
-  `-x` to append "(cherry picked from commit ...)" to the message for traceability.
+- `main` now includes the port fix, while `logging.txt` and `debug.txt` never touched `main`.
+- The new commit on `main` has a different hash (`5dbc089` vs `6480118`) because its parent commit is different, though the diff, author, and timestamp are preserved.
+- If there are conflicts during a cherry-pick, Git pauses and lets you resolve them manually, then you run `git cherry-pick --continue` (or abort safely with `--abort`).
+- Useful flags to remember:
+  - `git cherry-pick A..B` — cherry-picks a range of commits.
+  - `-n` (`--no-commit`) — applies the changes directly to your working tree and staging area without creating a commit yet.
+  - `-x` — automatically adds a note saying `(cherry picked from commit ...)` inside the commit message for an audit trail.

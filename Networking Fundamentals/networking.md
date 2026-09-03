@@ -1,140 +1,160 @@
-# Networking Fundamentals
+# Networking Fundamentals — Everyday Diagnostic Tools
 
-Nine everyday networking commands, each run for real, with a note on what the output means.
-Commands that exist on macOS were run on my laptop; the Linux-only ones (`ip`, `ss`, `wget`)
-were run inside an Ubuntu 24.04 container.
+Nine essential terminal networking utilities, tested hands-on with practical notes on interpreting their output. Commands standard across UNIX systems were run locally; Linux-specific tools (`ip`, `ss`, `wget`) were executed inside an Ubuntu 24.04 container.
 
-## 1. ping - is the host reachable, and how far away is it?
+---
+
+## 1. `ping` — Host Reachability & Latency Check
 
 ```bash
 ping -c 4 github.com
 ```
 
-Sends four ICMP echo requests and waits for the replies. The output resolves the name first
-(`20.207.73.82`), then prints one line per reply with the round-trip time. The summary shows
-0% packet loss and min/avg/max latency.
+Sends 4 ICMP ECHO_REQUEST packets to the destination and listens for replies. The terminal first prints the resolved IP (`20.207.73.82`), followed by individual round-trip timings per packet. The summary block highlights packet loss (0%) and min/avg/max/stddev latency numbers.
 
-Takeaway: a quick yes/no on connectivity plus a feel for latency. Note that some hosts block
-ICMP, so "no reply" does not always mean "down".
+**Real-world takeaway:** The quickest sanity check for basic IP connectivity. Keep in mind that some corporate firewalls and cloud hosts drop ICMP entirely, so a lack of ping responses doesn't always guarantee the server is offline.
 
 ![ping](screenshots/ping.png)
 
-## 2. ip a - what addresses does this machine have?
+---
+
+## 2. `ip a` — Inspecting Network Interfaces & Addresses
 
 ```bash
 ip a
 ```
 
-Lists every interface with its state, MAC address and IPv4/IPv6 addresses. In the container
-the two that matter are `lo` (127.0.0.1, loopback) and `eth0` (172.17.0.3/16, the Docker
-bridge). The `/16` is the subnet mask in CIDR form. The other entries (`tunl0`, `gre0`,
-`sit0` and so on) are kernel tunnel devices that exist but are `DOWN`; they can be ignored.
+Lists all physical and virtual interfaces alongside their operational state, MAC address, and configured IPv4/IPv6 subnets. In the container environment, the key interfaces are:
+- `lo`: Loopback interface (`127.0.0.1`)
+- `eth0`: Virtual container interface (`172.17.0.3/16`, attached to the default Docker bridge)
 
-Takeaway: this replaces the older `ifconfig`. `ip -br a` gives a compact one-line-per-interface view.
+The `/16` CIDR notation defines the subnet mask. Inactive tunnel interfaces (`tunl0`, `gre0`, `sit0`) appear in `DOWN` state and can be safely ignored.
+
+**Real-world takeaway:** The modern Linux standard replacing legacy `ifconfig`. You can also run `ip -br a` for a cleaner, one-line-per-interface summary.
 
 ![ip a](screenshots/ip-a.png)
 
-## 3. ip route - where do packets go?
+---
+
+## 3. `ip route` — Inspecting the Kernel Routing Table
 
 ```bash
 ip route
 ip route get 1.1.1.1
 ```
 
-The first prints the routing table: a `default via 172.17.0.1` line (the gateway for anything
-not matched by a more specific route) and a directly connected route for `172.17.0.0/16`.
-`ip route get` asks the kernel which route a specific destination would use.
+`ip route` reveals where outbound packets are dispatched:
+- `default via 172.17.0.1`: Default gateway for any traffic heading outside the local network.
+- `172.17.0.0/16 dev eth0`: Direct local subnet route.
 
-Takeaway: if the default route is missing or points at the wrong gateway, nothing outside the
-local subnet is reachable.
+`ip route get <destination>` tests the routing engine for a specific destination IP and prints the exact interface, gateway, and source IP that will handle the traffic.
+
+**Real-world takeaway:** Essential when traffic leaves a machine but never reaches external servers; if the default gateway is absent or misconfigured, external traffic will simply fail.
 
 ![ip route](screenshots/ip-route.png)
 
-## 4. ss - which ports are open, and who owns them?
+---
+
+## 4. `ss` — Active Ports and Sockets
 
 ```bash
+# Start a quick background server to test against
 python3 -m http.server 8000 &
+
+# Inspect open sockets
 ss -tulpn
 ss -s
 ```
 
-I started a throwaway HTTP server first so there would be something to see. `ss -tulpn` shows
-it listening on `0.0.0.0:8000`, owned by `python3` with its PID. Flags: `-t` TCP, `-u` UDP,
-`-l` listening only, `-p` process, `-n` numeric ports. `ss -s` prints socket totals.
+`ss -tulpn` lists listening TCP/UDP sockets with process ownership:
+- `-t`: TCP sockets
+- `-u`: UDP sockets
+- `-l`: Listening sockets only
+- `-p`: Show process name and PID
+- `-n`: Show numerical port numbers instead of service names
 
-Takeaway: the modern replacement for `netstat`. The first thing to run when a service "won't
-start" because a port is already in use.
+The test server was captured listening on `0.0.0.0:8000` under process `python3`. `ss -s` provides total socket statistics across established, closed, and listening states.
+
+**Real-world takeaway:** The modern replacement for `netstat`. Always the first tool to run when troubleshooting `"Address already in use"` errors during application startup.
 
 ![ss](screenshots/ss.png)
 
-## 5. curl - talk HTTP from the terminal
+---
+
+## 5. `curl` — Direct HTTP / API Communication
 
 ```bash
 curl -I https://github.com
 ```
 
-`-I` sends a HEAD request and prints only the response headers. The `HTTP/2 200` status line
-confirms the site answered, and the headers reveal the server, caching policy, cookies and
-security settings such as `strict-transport-security`.
+The `-I` flag sends an HTTP `HEAD` request to inspect response headers without downloading the body. The session confirmed an `HTTP/2 200` status, cache headers, cookie flags, and security headers like `strict-transport-security`.
 
-Takeaway: `curl` is the Swiss-army knife for APIs. Other forms I use: `-s` silent, `-o file`
-to save, `-X POST -d '{...}'` to send data, `-v` to watch the TLS handshake and headers.
+**Real-world takeaway:** The core CLI tool for inspecting web servers and APIs. Common everyday flags:
+- `-s`: Silent mode (suppresses progress meters)
+- `-o <file>`: Save response body directly to disk
+- `-v`: Verbose output showing the complete TLS handshake and raw request/response headers
+- `-X POST -d '{"data": 1}'`: Dispatching HTTP POST payloads
 
 ![curl](screenshots/curl.png)
 
-## 6. wget - download a file
+---
+
+## 6. `wget` — File Downloading
 
 ```bash
 wget https://example.com/
 wget -O page.html -q https://example.com/
 ```
 
-`wget` resolves the host, connects on 443, reports the `200 OK`, and saves the body to disk
-(`index.html`, 559 bytes). `-O` picks the output name and `-q` silences the progress output.
+Connects over HTTPS, receives `200 OK`, and downloads the webpage directly to `index.html` (559 bytes). The `-O page.html` argument sets a custom output filename, and `-q` runs quietly without terminal progress bars.
 
-Takeaway: where `curl` prints to stdout by default, `wget` writes files by default and can
-resume (`-c`) or mirror a site (`-r`). Both do the same job for a single file.
+**Real-world takeaway:** While `curl` prints to stdout by default, `wget` is purpose-built for writing files to disk, resuming interrupted downloads (`-c`), and recursively crawling web assets (`-r`).
 
 ![wget](screenshots/wget.png)
 
-## 7. nslookup and dig - DNS lookups
+---
+
+## 7. `nslookup` & `dig` — DNS Queries
 
 ```bash
 nslookup github.com
 dig +short github.com
 ```
 
-`nslookup` shows which resolver answered (the network's DNS server at `1.1.1.1`) and the
-A record it returned. `dig +short` prints only the answer, which is handy in scripts. Without `+short`,
-`dig` prints the full query/answer sections with TTLs.
+`nslookup` queries the configured resolver (`1.1.1.1`) and prints the returned IPv4 A record. For scripting and automation, `dig +short` outputs just the resolved IP cleanly without any DNS header boilerplate.
 
-Takeaway: when a site is "down" but `ping 1.1.1.1` works, DNS is the first suspect.
+**Real-world takeaway:** If an external service is unreachable by domain name but pinging an IP like `1.1.1.1` succeeds, DNS resolution is almost certainly the culprit.
 
 ![nslookup](screenshots/nslookup.png)
 
-## 8. traceroute - the path to a host
+---
+
+## 8. `traceroute` — Network Hop Tracing
 
 ```bash
 traceroute -m 15 -w 2 github.com
 ```
 
-Sends probes with increasing TTL so each router along the way replies once, printing one hop
-per line with three timings. Hops that show `* * *` are routers that do not answer probes;
-that is normal on the public internet. `-m 15` caps the hop count and `-w 2` shortens the wait.
+Dispatches packets with incrementally increasing TTL (Time To Live) values. Each intermediate router decrements TTL, drops expired packets, and replies with an ICMP Time Exceeded message, charting out the physical path hop-by-hop.
+- `-m 15`: Caps path discovery to a maximum of 15 hops
+- `-w 2`: Lowers wait timeout to 2 seconds per probe
 
-Takeaway: useful for spotting *where* latency appears, not just that it exists.
+Hops showing `* * *` represent edge firewalls or transit routers that deliberately ignore ICMP probes, which is standard practice across public routes.
+
+**Real-world takeaway:** Highlights exactly where packets hit bottlenecks, unexpected routing loops, or high-latency router hops.
 
 ![traceroute](screenshots/traceroute.png)
 
-## 9. hostname - who am I on the network?
+---
+
+## 9. `hostname` — System Identity on the Network
 
 ```bash
 hostname
 hostname -f
-ipconfig getifaddr en0      # macOS; on Linux use: hostname -I
+ipconfig getifaddr en0      # macOS active interface IP (use 'hostname -I' on Linux)
 ```
 
-Prints the machine's name, its fully qualified form, and the IPv4 address on the active
-interface. On Linux `hostname -I` prints all addresses in one line.
+Displays the local machine's configured hostname, its fully-qualified domain name (FQDN), and the current interface IP address.
 
 ![hostname](screenshots/hostname.png)

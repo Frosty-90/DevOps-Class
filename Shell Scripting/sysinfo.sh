@@ -1,3 +1,6 @@
+#!/bin/bash
+# sysinfo.sh - Collects basic machine metrics, prompts for output paths,
+# and writes process tables to a custom report file.
 
 today=$(date)
 box=$(hostname)
@@ -27,7 +30,7 @@ read -p "Report file name: " report_file
 mkdir -p "$report_dir"
 touch "$report_dir/$report_file"
 
-# Full process list goes to the file with > redirection
+# Redirect the untruncated process list to the chosen report file
 ps aux > "$report_dir/$report_file"
 
 echo

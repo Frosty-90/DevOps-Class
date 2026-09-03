@@ -1,27 +1,30 @@
-# Shell Scripting - sysinfo.sh
+# Shell Scripting — `sysinfo.sh`
 
-A small Bash script that summarises the machine it runs on, asks where to put a report, and
-writes the full process list to that report with output redirection.
+A lightweight Bash script that displays a quick system diagnostic summary on-screen, asks the user where to write an audit log, and dumps full process diagnostics to that file using shell output redirection.
 
-## Requirements covered
+---
 
-| Requirement | How the script does it |
+## Assignment Requirements Breakdown
+
+| Requirement | Implementation in `sysinfo.sh` |
 |---|---|
-| Print date, hostname, user | `date`, `hostname`, `whoami` captured with `$(...)` |
-| Show disk usage | `df -h`, plus a one-line summary parsed with `awk` |
-| Show running processes | `ps aux`, sorted by CPU, top 10 |
-| Use variables | `today`, `box`, `me`, `disk`, `proc_count`, `report_dir`, `report_file` |
-| Read user input | two `read -p` prompts |
-| Create a directory | `mkdir -p "$report_dir"` |
-| Create a file | `touch "$report_dir/$report_file"` |
-| Redirect output to the file | `ps aux > "$report_dir/$report_file"` |
+| **System Identity & Date** | Captured via command substitution: `$(date)`, `$(hostname)`, `$(whoami)` |
+| **Disk Capacity** | Parsed root filesystem stats using `df -h /` and filtered with `awk` |
+| **Process Inspection** | Filtered `ps aux`, sorted descending by CPU utilization, limited to top 10 |
+| **Variable Usage** | Tracked in `today`, `box`, `me`, `disk`, `proc_count`, `report_dir`, `report_file` |
+| **Interactive User Input** | Captured dynamically with two `read -p` prompts |
+| **Directory Creation** | Safely created using `mkdir -p "$report_dir"` |
+| **File Initialization** | Created / timestamped with `touch "$report_dir/$report_file"` |
+| **Output Redirection** | Redirected complete process list via stdout operator (`>`) |
 
-## The script
+---
+
+## The Script Source
 
 ```bash
 #!/bin/bash
-# sysinfo.sh - print a quick system summary, then save the process list
-# to a file whose location the user chooses at runtime.
+# sysinfo.sh - Collects basic machine metrics, prompts for output paths,
+# and writes process tables to a custom report file.
 
 today=$(date)
 box=$(hostname)
@@ -51,36 +54,41 @@ read -p "Report file name: " report_file
 mkdir -p "$report_dir"
 touch "$report_dir/$report_file"
 
-# Full process list goes to the file with > redirection
+# Redirect the untruncated process list to the chosen report file
 ps aux > "$report_dir/$report_file"
 
 echo
 echo "Saved $(wc -l < "$report_dir/$report_file" | tr -d ' ') lines of process data to $report_dir/$report_file"
 ```
 
-A few choices worth noting:
+### Scripting Implementation Details
 
-- Variables are quoted everywhere they are expanded, so a directory name with a space works.
-- `mkdir -p` does not fail if the directory already exists, so the script can be re-run.
-- `sort -rk 3` sorts on the third column of `ps aux` (%CPU) descending; `cut -c1-110` keeps
-  long command lines from wrapping on screen. The file gets the untrimmed list.
-- `>` truncates and rewrites the report each run. Swapping it for `>>` would append instead.
+- **Safe Variable Quoting:** All variable expansions (e.g. `"$report_dir"`) are wrapped in double quotes to gracefully handle directory or file names containing spaces.
+- **Idempotent Directory Creation:** `mkdir -p` ensures the script doesn't blow up if the target directory already exists.
+- **CPU Sorting:** `sort -rk 3` sorts descending based on column 3 (`%CPU`) from `ps aux`. On screen, `cut -c1-110` truncates overly long commands to prevent messy line-wrapping, whereas the saved file receives the full, unaltered output.
+- **Redirection Semantics:** Single greater-than `>` truncates and overwrites the destination file fresh on each invocation. Switching to `>>` would append instead.
 
-## Running it
+---
+
+## Executing the Script
+
+Make the script executable and trigger the run:
 
 ```bash
 chmod +x sysinfo.sh
 ./sysinfo.sh
 ```
 
-When prompted I entered `reports` for the directory and `processes.txt` for the file.
+During the interactive run, we passed `reports` as the folder name and `processes.txt` as the output filename.
 
-Summary block, disk usage, and the top processes:
+### Terminal Output: System Summary & Top Processes
 
 ![script output](screenshots/script-output.png)
 
-The report that was written, checked with `ls`, `head` and `wc -l`:
+### Verifying the Saved Report
+
+Inspecting the output file with `ls`, `head`, and `wc -l` confirms the full process list was cleanly redirected to disk:
 
 ![saved report](screenshots/saved-report.png)
 
-The `reports/` directory is a run-time artefact and is not committed.
+*(The generated `reports/` folder is created at runtime and excluded from source control).*

@@ -1,60 +1,74 @@
-# Docker Networks and Volumes
+# Docker Networks & Volumes — Lab Notes
 
-Four exercises: user-defined bridge networks with a container on several of them, the host
-network driver, a bind mount, and a note on overlay networks.
+Hands-on exploration of Docker networking primitives and volume mounting: setting up isolated user-defined bridge networks across a 3-tier architecture, utilizing host networking mode, syncing files live with bind mounts, and reviewing overlay networks for multi-host deployments.
 
-## 1. Three containers, three networks
+---
 
-The goal is a layout where the middle tier can reach both neighbours but the outer tiers
-cannot reach each other.
+## 1. Multi-Network Isolation (Three-Tier Topology)
 
-| Container | Image | Networks |
+The objective is to enforce strict network separation: the middle tier (`api`) needs to communicate with both the frontend (`web`) and database (`db`), but `web` must have zero direct visibility into `db`.
+
+| Container | Base Image | Attached Networks |
 |---|---|---|
-| `web` | `nginx:alpine` | `public-net` |
-| `api` | `nginx:alpine` | `app-net`, `public-net`, `data-net` |
-| `db` | `postgres:16-alpine` | `data-net` |
+| **`web`** | `nginx:alpine` | `public-net` |
+| **`api`** | `nginx:alpine` | `app-net`, `public-net`, `data-net` |
+| **`db`** | `postgres:16-alpine` | `data-net` |
+
+### Setting Up Networks and Launching Containers
 
 ```bash
+# Create three custom bridge networks
 docker network create public-net
 docker network create app-net
 docker network create data-net
 
+# Spin up containers
 docker run -d --name web --network public-net nginx:alpine
 docker run -d --name api --network app-net    nginx:alpine
 docker run -d --name db  --network data-net   -e POSTGRES_PASSWORD=secret postgres:16-alpine
 
-# attach api to the other two networks after it is running
+# Multi-home the api container by attaching it to both public and data networks
 docker network connect public-net api
 docker network connect data-net   api
 
+# Confirm attached networks on the api container
 docker inspect api --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
-# app-net data-net public-net
+# Returns: app-net data-net public-net
 ```
 
-Connectivity checks, run with the tools already inside the images (`wget` and `nc` from BusyBox):
+### Verifying Network Boundaries
+
+Testing inter-container connectivity using built-in utilities (`wget` and `nc`):
 
 ```bash
-docker exec api wget -qO- http://web  | grep -o "<title>.*</title>"   # works
-docker exec api nc -z -w 3 db 5432 && echo "db:5432 reachable from api"    # works
-docker exec web nc -z -w 3 db 5432                                    # nc: bad address 'db'
-docker exec web wget -qO- http://api  | grep -o "<title>.*</title>"   # works
+# api -> web: Allowed (shares public-net)
+docker exec api wget -qO- http://web | grep -o "<title>.*</title>"
+
+# api -> db: Allowed (shares data-net)
+docker exec api nc -z -w 3 db 5432 && echo "db:5432 reachable from api"
+
+# web -> db: BLOCKED (shares no common network)
+docker exec web nc -z -w 3 db 5432
+# Result: nc: bad address 'db' (DNS resolution fails completely)
+
+# web -> api: Allowed (shares public-net)
+docker exec web wget -qO- http://api | grep -o "<title>.*</title>"
 ```
 
-What this demonstrates:
-
-- On a user-defined network Docker runs an embedded DNS server, so containers resolve each
-  other by name. `web` could resolve `api` because they share `public-net`.
-- `web` could not even *resolve* `db`; the two share no network, so the name does not exist
-  from `web`'s point of view. That is stronger isolation than a closed port.
-- A container can sit on any number of networks. `api` has three interfaces and one IP on each.
-  This is how a real API tier talks to a database that the public-facing tier never sees.
+### Key Takeaways:
+- **Embedded DNS Resolution:** Containers connected to custom user-defined bridges automatically resolve sibling containers by name via Docker's embedded DNS server.
+- **True Network Isolation:** Because `web` does not share `data-net` with `db`, it cannot even resolve the name `db`, let alone reach its port. This gives much stronger isolation than relying on software firewalls alone.
+- **Multi-Homed Services:** A container can belong to multiple networks simultaneously, obtaining a unique virtual interface and IP on each one.
 
 ![three-tier networks](screenshots/three-tier-networks.png)
 
-## 2. Host network
+---
 
-Port 80 inside the engine's VM was already taken by another container, so this run points
-nginx at 8085 instead with a one-line config in `host-net/default.conf`:
+## 2. Host Networking Mode (`--network host`)
+
+When using `--network host`, Docker disables network namespace isolation for the container; the container binds directly to the host's network interfaces.
+
+To avoid port conflicts on port 80, Nginx was configured via a mounted config (`host-net/default.conf`) to listen on port `8085`:
 
 ```nginx
 server {
@@ -66,82 +80,73 @@ server {
 }
 ```
 
+### Starting the Container on the Host Network
+
 ```bash
 docker run -d --name host-web --network host \
   -v "$(pwd)/host-net/default.conf:/etc/nginx/conf.d/default.conf:ro" nginx:alpine
-docker ps --filter name=host-web        # PORTS column is empty
-docker inspect host-web --format '{{.HostConfig.NetworkMode}}'   # host
+
+# Notice the PORTS column is completely empty (no NAT / port translation)
+docker ps --filter name=host-web
+docker inspect host-web --format '{{.HostConfig.NetworkMode}}'   # Output: host
 ```
 
-With `--network host` the container has no network namespace of its own. It uses the host's
-interfaces directly, so `-p` is meaningless and `docker ps` shows no port mappings. Nginx is
-simply listening on the host's port 8085.
-
-On Docker Desktop for macOS the "host" is the Linux VM that runs the engine, not the Mac
-itself, so `curl localhost` from the Mac does not reach it. To prove the container was on the
-host network I ran a second container on the same network and fetched the page from
-`127.0.0.1:8085`:
+*(On Docker Desktop for macOS, the engine runs inside a lightweight Linux VM. To test reachability on that VM's host network, an Alpine test container made an internal request to `127.0.0.1:8085`)*:
 
 ```bash
 docker run --rm --network host alpine wget -qO- http://127.0.0.1:8085 | grep -o "<title>.*</title>"
-# <title>Welcome to nginx!</title>
+# Returns: <title>Welcome to nginx!</title>
 ```
 
-On a native Linux host the same page is available at `http://localhost:8085` directly.
+On a standard Linux machine, this service is immediately reachable right from `http://localhost:8085`.
 
 ![host network](screenshots/host-network.png)
 
-## 3. Bind mount
+---
 
-A bind mount maps a directory on the host into the container. Edits on either side are
-visible on the other immediately, because it is the same directory.
+## 3. Live File Updates with Bind Mounts
+
+A bind mount directly mounts a specific directory from the host filesystem into a container directory. Any file edit made on either side is reflected immediately because both point to the exact same filesystem location.
 
 ```bash
 mkdir site
-# write site/index.html (see the site/ folder)
+# Initialize site/index.html
 
+# Run Nginx with site mounted read-only (:ro)
 docker run -d --name nginx-live -p 8090:80 \
   -v "$(pwd)/site:/usr/share/nginx/html:ro" nginx:alpine
 
+# Test initial file content
 curl -s http://localhost:8090 | grep "<p>"
-#   <p>Version 1: this file lives on the host and is mounted into the container.</p>
+# Output: <p>Version 1: this file lives on the host and is mounted into the container.</p>
 
-# edit the file on the host while the container keeps running
+# Update file directly on the host while the container is actively running
 sed -i '' 's/Version 1: .*container\./Version 2: edited on the host while the container kept running./' site/index.html
 
+# Verify the immediate change without rebuilding or restarting
 curl -s http://localhost:8090 | grep "<p>"
-#   <p>Version 2: edited on the host while the container kept running.</p>
+# Output: <p>Version 2: edited on the host while the container kept running.</p>
 
+# Inspect mount properties
 docker inspect nginx-live --format '{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}} ({{.Mode}}){{end}}'
-# bind /.../Docker Networks/site -> /usr/share/nginx/html (ro)
 ```
 
-No restart, no rebuild; the second `curl` returned the new text. The `:ro` suffix mounts it
-read-only inside the container, which is a sensible default for serving static files. The
-`site/` folder with the final `index.html` is committed alongside this README.
+**Takeaway:** Bind mounts eliminate the need to rebuild images during local development. The `:ro` flag ensures the container cannot tamper with or overwrite local host files.
 
 ![bind mount](screenshots/bind-mount.png)
 
-## 4. Overlay networks (reading)
+---
 
-The bridge networks above only exist on one Docker host. An **overlay network** spans several
-hosts so that containers on different machines can talk to each other by name as if they were
-on one LAN.
+## 4. Overlay Networks (Multi-Host Overview)
 
-How it works, briefly:
+Standard Docker bridge networks are confined to a single host machine. An **overlay network** bridges multiple Docker daemon hosts across a cluster so containers on separate physical or virtual machines can communicate securely by name as if they were plugged into the same local switch.
 
-- Each host keeps a VXLAN tunnel endpoint. Container traffic is wrapped in UDP packets
-  (port 4789) and sent across the real network to the host that owns the destination
-  container, where it is unwrapped.
-- Membership and IP allocation are coordinated by a cluster manager. In Docker that is
-  **Swarm mode**; Kubernetes solves the same problem with CNI plugins such as Flannel or Calico.
-- Traffic can be encrypted on the wire with `--opt encrypted` when the network is created.
+### Architecture Highlights:
+- **VXLAN Encapsulation:** Traffic between containers across different nodes is encapsulated into standard UDP packets (port `4789`), transmitted across the physical network, and decapsulated at the destination node.
+- **Cluster Coordination:** Multi-host node membership and IP state are managed via orchestrators like **Docker Swarm** (or via CNI plugins such as Calico / Cilium / Flannel in Kubernetes).
+- **In-Flight Encryption:** Can be activated seamlessly with `--opt encrypted` during network creation.
 
-When to use it: any time a service is scaled across more than one machine, or when different
-services live on different machines and should reach each other without publishing ports on
-every host.
-
-Minimal example on a Swarm:
+### Swarm Minimal Setup Example:
 
 ```bash
 docker swarm init
@@ -149,14 +154,18 @@ docker network create --driver overlay --attachable team-overlay
 docker service create --name web --network team-overlay --replicas 3 nginx:alpine
 ```
 
-| | Bridge | Overlay |
-|---|---|---|
-| Scope | One host | Many hosts |
-| Needs an orchestrator | No | Yes (Swarm or Kubernetes) |
-| Encapsulation | None, plain Linux bridge | VXLAN over UDP |
-| Typical use | Local development, single-server deployments | Clustered services, microservices across nodes |
+### Bridge vs. Overlay Comparison
 
-## Cleanup
+| Feature | Bridge Network | Overlay Network |
+|---|---|---|
+| **Scope** | Single Docker host | Distributed across multiple cluster hosts |
+| **Requires Orchestrator?** | No | Yes (Docker Swarm or Kubernetes) |
+| **Encapsulation** | None (standard Linux bridge) | VXLAN tunneling over UDP |
+| **Primary Use Case** | Local testing & single-host services | Multi-node clusters & distributed microservices |
+
+---
+
+## Clean Up Lab Resources
 
 ```bash
 docker rm -f web api db host-web nginx-live
